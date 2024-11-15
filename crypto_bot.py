@@ -126,17 +126,51 @@ class GridBot:
         price_low = self.current_price * (1 - self.price_margin)
         price_high = self.current_price * (1 + self.price_margin)
         
+        # 計算單筆交易的總手續費率
+        total_fee_rate = (self.maker_fee + self.taker_fee) * 100  # 轉換為百分比
+        
+        # 計算在當前價格範圍內，能夠保證利潤大於手續費的最大網格數
+        price_range = price_high - price_low
+        min_grid_profit = total_fee_rate / 100  # 最小需要的利潤率（轉回小數）
+        max_grid_num = int(price_range / (self.current_price * min_grid_profit))
+        
+        print(f"\n=== 網格參數分析 ===")
+        print(f"當前價格: {colored(self.current_price, 'yellow')} USDT")
+        print(f"價格範圍: {colored(price_low, 'red')} - {colored(price_high, 'green')} USDT")
+        print(f"總價格範圍: {price_range:.6f} USDT")
+        print(f"總手續費率: {colored(f'{total_fee_rate:.4f}%', 'red')}")
+        print(f"建議最大網格數: {colored(str(max_grid_num), 'cyan')}")
+        print(f"當前設置網格數: {colored(str(self.grid_num), 'yellow')}")
+        
+        # 創建網格
         self.grid_prices = np.linspace(price_low, price_high, self.grid_num)
         
-        # 算單格利潤
+        # 計算當前設置的單格利潤
         grid_profit = self.calculate_grid_profit()
         
-        print(f"\n=== 網格交易設置 ===")
-        print(f"當前價格: {colored(self.current_price, 'yellow')} USDT")
-        print(f"網格範圍: {colored(price_low, 'red')} - {colored(price_high, 'green')} USDT")
-        print(f"網格數量: {self.grid_num}")
+        print(f"\n=== 利潤分析 ===")
         print(f"單格利潤: {colored(f'{grid_profit:.4f}%', 'cyan')}")
-        print(f"投資金額: {colored(f'{self.investment_amount} USDT', 'yellow')}")
+        print(f"總手續費率: {colored(f'{total_fee_rate:.4f}%', 'red')}")
+        
+        # 檢查利潤是否足夠支付手續費
+        if grid_profit <= total_fee_rate:
+            print(colored("\n警告: 單格利潤小於等於總手續費率！", 'red'))
+            print(colored("建議調整網格參數以增加單格利潤", 'red'))
+            print(colored(f"1. 建議將網格數量設置在 {max_grid_num} 以下", 'yellow'))
+            print(colored(f"2. 當前網格數 {self.grid_num} 過多", 'yellow'))
+            print(colored("3. 或者增加價格範圍（當前±10%）", 'yellow'))
+            
+            confirm = input("\n是否仍要繼續？(y/n): ")
+            if confirm.lower() != 'y':
+                print("已取消網格交易")
+                return False
+            print("\n已確認繼續運行，請注意風險")
+        else:
+            print(colored(f"單格淨利潤: {grid_profit - total_fee_rate:.4f}%", 'green'))
+            if self.grid_num > max_grid_num:
+                print(colored(f"\n提示: 當前網格數({self.grid_num})超過建議值({max_grid_num})", 'yellow'))
+                print(colored("雖然仍有利潤，但建議適當減少網格數以提高每筆交易的利潤", 'yellow'))
+            
         return True
         
     def log_trade(self, trade_info):
@@ -299,8 +333,6 @@ class GridBot:
         
         last_grid_index = None
         is_first_trade = True
-        active_buy_order = None
-        active_sell_order = None
         
         try:
             while True:
@@ -313,24 +345,21 @@ class GridBot:
                 
                 # 顯示基本信息
                 print(f"\n=== 網格交易運行中 ===")
+                print(f"目前執行網格區間為: {colored(f'{self.grid_prices[0]:.6f}', 'red')} - {colored(f'{self.grid_prices[-1]:.6f}', 'green')} USDT")
                 print(f"當前時間: {datetime.now().strftime('%H:%M:%S')}")
                 print(f"當前市價: {colored(current_price, 'yellow')} USDT")
                 
                 # 找到當前價格所在的網格位置
                 grid_index = np.searchsorted(self.grid_prices, current_price)
                 
-                # 更新買賣單
+                # 顯示當前網格的買賣單
                 if grid_index > 0:  # 買單
-                    new_buy_price = self.grid_prices[grid_index - 1]
-                    if active_buy_order != new_buy_price:
-                        active_buy_order = new_buy_price
-                        print(colored(f"更新買單 價格: {active_buy_order:.6f} USDT", 'red'))
-                
+                    buy_price = self.grid_prices[grid_index - 1]
+                    print(colored(f"買單價格: {buy_price:.6f} USDT", 'red'))
+                    
                 if grid_index < len(self.grid_prices) - 1 and not is_first_trade:  # 賣單
-                    new_sell_price = self.grid_prices[grid_index + 1]
-                    if active_sell_order != new_sell_price:
-                        active_sell_order = new_sell_price
-                        print(colored(f"更新賣單 價格: {active_sell_order:.6f} USDT", 'green'))
+                    sell_price = self.grid_prices[grid_index + 1]
+                    print(colored(f"賣單價格: {sell_price:.6f} USDT", 'green'))
                 
                 # 如果價格跨越了網格，執行交易
                 if last_grid_index is not None and grid_index != last_grid_index:
@@ -352,12 +381,6 @@ class GridBot:
                 last_grid_index = grid_index
                 
                 # 顯示當前狀態
-                print(f"\n=== 當前掛單 ===")
-                if active_buy_order:
-                    print(colored(f"買單價格: {active_buy_order:.6f} USDT", 'red'))
-                if active_sell_order and not is_first_trade:
-                    print(colored(f"賣單價格: {active_sell_order:.6f} USDT", 'green'))
-                
                 print(f"\n=== 帳戶狀態 ===")
                 print(f"當前持倉: {self.position:.6f} CRO")
                 print(f"USDT 餘額: {self.usdt_balance:.2f} USDT")
@@ -388,9 +411,9 @@ class GridBot:
             print(f"總手續費: {colored(f'{self.total_fee:.6f} USDT', 'red')}")
             print(f"總利潤(含手續費): {colored(f'{final_profit:.2f} USDT', 'yellow')}")
             print(f"收益率: {colored(f'{profit_percentage:.2f}%', 'yellow')}")
-            print("\n有內鬼，停止交易")
+            print("\n停止交易")
 
 if __name__ == "__main__":
     # 創建並運行網格機器人
-    bot = GridBot(instrument_name="CRO_USDT", grid_num=1000, price_margin=0.1, investment_amount=500)
+    bot = GridBot(instrument_name="CRO_USDT", grid_num=10, price_margin=0.01, investment_amount=500)
     bot.simulate_trading() 
